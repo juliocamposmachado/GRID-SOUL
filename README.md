@@ -75,3 +75,8 @@ A suíte verifica a identidade dos 118 elementos, integridade e mapeamento do at
 ## Privacidade e arquivos
 
 `data/gridsoul-memory.json` é local e não é empacotado. Backups recebidos permanecem em `historico/originais/`, mas não são carregados pela aplicação. O ZIP exclui `node_modules`, `.git`, `.env`, memória, cookies e perfis do navegador.
+
+
+---
+
+# GRID-SOUL
