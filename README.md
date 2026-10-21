@@ -28,6 +28,8 @@ Extraia o ZIP em uma pasta nova; não misture arquivos com uma versão antiga e 
 ```bash
 npm ci
 npm start
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.config/gridsoul-chrome"
+
 ```
 
 Abra [http://127.0.0.1:8765/?demo=1](http://127.0.0.1:8765/?demo=1). O servidor fica limitado ao loopback; não o exponha publicamente. A renderização facial funciona sem sessão de IA; para enviar comandos ao ChatGPT, configure CDP local ou a extensão Chrome conforme abaixo.
