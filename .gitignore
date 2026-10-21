@@ -1,0 +1,40 @@
+.env
+node_modules/
+npm-debug.log*
+
+# Perfil autenticado de navegador: nunca distribua.
+.chatgpt-profile/
+
+# Memória local do GRID SOUL contém comandos e estado do usuário.
+data/gridsoul-memory.json
+data/gridsoul-memory.json.tmp
+
+# Saídas de teste e logs locais.
+coverage/
+*.log
+
+# Segredos e credenciais
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials.json
+
+# Dependencias e ambientes Python/Node
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Arquivos de sistema e logs
+.DS_Store
+Thumbs.db
+*.log
+
+# Builds e caches
+dist/
+build/
+.cache/

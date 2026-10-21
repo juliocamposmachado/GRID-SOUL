@@ -1,0 +1,341 @@
+import express from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import { chromium } from 'playwright';
+
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+
+app.disable('x-powered-by');
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.json({ limit: '8kb' }));
+app.use('/api/', rateLimit({ windowMs: 60_000, limit: 12, skip: req => req.path === '/extension/next' }));
+
+const shapes = ['sphere', 'torus', 'spiral', 'wave', 'cloud', 'face', 'custom'];
+const partKinds = ['sphere', 'ellipsoid', 'torus', 'cylinder', 'cone', 'box'];
+
+// GRID_SOUL_CDP_BRIDGE
+let busy = false;
+let cdpBrowser = null;
+
+async function getChatGPTPage() {
+  if (!cdpBrowser || !cdpBrowser.isConnected()) {
+    cdpBrowser = await chromium.connectOverCDP("http://127.0.0.1:9222");
+  }
+
+  const contexts = cdpBrowser.contexts();
+  if (!contexts.length) throw new Error("Nenhum contexto Chrome disponível.");
+
+  const context = contexts[0];
+  let pages = context.pages();
+  let page = pages.find(p => /chatgpt\.com|chat\.openai\.com/.test(p.url()));
+
+  if (!page) {
+    page = pages[0] || await context.newPage();
+    await page.goto("https://chatgpt.com/", { waitUntil: "domcontentloaded", timeout: 30000 });
+  }
+
+  await page.bringToFront();
+  return page;
+}
+
+async function firstVisible(page, selectors) {
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    if (await locator.count().catch(() => 0)) {
+      if (await locator.isVisible().catch(() => false)) return locator;
+    }
+  }
+  return null;
+}
+
+
+function extractJSON(raw) {
+  if (raw && typeof raw === "object") return raw;
+  if (typeof raw !== "string") {
+    throw new Error("A resposta do ChatGPT não é texto.");
+  }
+
+  const text = raw.replace(/```(?:json)?/gi, "");
+  let result = null;
+
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+
+    for (let j = i; j < text.length; j++) {
+      const c = text[j];
+
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (c === "\\") escaped = true;
+        else if (c === '"') quoted = false;
+        continue;
+      }
+
+      if (c === '"') quoted = true;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) {
+        try {
+          const parsed = JSON.parse(text.slice(i, j + 1));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            result = parsed;
+          }
+        } catch {}
+        break;
+      }
+    }
+  }
+
+  if (!result) throw new Error("O ChatGPT não retornou um JSON válido.");
+  return result;
+}
+
+function sanitizePlan(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("O plano visual recebido é inválido.");
+  }
+
+  const number = (value, fallback, min, max) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+  };
+
+  const allowedShapes = new Set(shapes);
+  const shape = allowedShapes.has(input.shape) ? input.shape : "sphere";
+  const color = typeof input.color === "string" && /^#[0-9a-fA-F]{6}$/.test(input.color)
+    ? input.color : "#00DFFF";
+
+  const allowedKinds = new Set(partKinds);
+  const parts = shape === "custom" && Array.isArray(input.parts)
+    ? input.parts.slice(0, 24).filter(p => p && typeof p === "object").map(p => ({
+        kind: allowedKinds.has(p.kind) ? p.kind : "box",
+        x: number(p.x, 0, -4, 4),
+        y: number(p.y, 0, -4, 4),
+        z: number(p.z, 0, -4, 4),
+        sx: number(p.sx, 0.5, 0.05, 3),
+        sy: number(p.sy, 0.5, 0.05, 3),
+        sz: number(p.sz, 0.5, 0.05, 3),
+        rx: number(p.rx, 0, -6.28, 6.28),
+        ry: number(p.ry, 0, -6.28, 6.28),
+        rz: number(p.rz, 0, -6.28, 6.28)
+      }))
+    : [];
+
+  return {
+    reply: typeof input.reply === "string"
+      ? input.reply.slice(0, 1000)
+      : "Plano visual recebido pelo GRID SOUL.",
+    shape,
+    population: Math.round(number(input.population, 85000, 1000, 500000)),
+    energy: number(input.energy, 0.7, 0, 1),
+    scale: number(input.scale, 2.5, 0.5, 8),
+    rotationX: number(input.rotationX, 0, -6.28, 6.28),
+    rotationY: number(input.rotationY, 0, -6.28, 6.28),
+    rotationZ: number(input.rotationZ, 0, -6.28, 6.28),
+    moveX: number(input.moveX, 0, -10, 10),
+    moveY: number(input.moveY, 0, -10, 10),
+    moveZ: number(input.moveZ, 0, -10, 10),
+    color,
+    parts
+  };
+}
+
+async function askChatGPT(prompt) {
+  const page = await getChatGPTPage();
+  const composer = await firstVisible(page, [
+    '[data-chatgpt-composer] [role="textbox"][contenteditable="true"]',
+    '[role="textbox"][contenteditable="true"]',
+    '[aria-label="Ask ChatGPT"]',
+    "textarea"
+  ]);
+
+  if (!composer) throw new Error("Campo de mensagem não encontrado no ChatGPT.");
+
+  const stopSelectors = [
+    'button[data-testid="stop-button"]',
+    'button[aria-label*="Stop generating"]',
+    'button[aria-label*="Parar"]'
+  ];
+
+  if (await firstVisible(page, stopSelectors)) {
+    throw new Error("O ChatGPT ainda está gerando uma resposta anterior.");
+  }
+
+  const body = page.locator("body");
+  const before = await body.innerText().catch(() => "");
+  const beforeAssistantCount = await page.locator(
+    '[data-message-author-role="assistant"]'
+  ).count().catch(() => 0);
+
+  await composer.fill(prompt);
+
+  // O botão de envio da interface atual pode não ter rótulo acessível.
+  // Após preencher, o último botão do formulário do compositor é o enviar.
+  const form = composer.locator("xpath=ancestor::form[1]");
+  const send = form.locator("button").last();
+
+  if (await send.count()) {
+    const sendInfo = await send.evaluate(b => ({
+      visible: (() => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      })(),
+      disabled: b.disabled,
+      aria: b.getAttribute("aria-label"),
+      svg: b.querySelector("svg use")?.getAttribute("href") || ""
+    }));
+
+    if (sendInfo.visible && !sendInfo.disabled &&
+        !/voice|microphone|microfone/i.test(
+          (sendInfo.aria || "") + " " + sendInfo.svg
+        )) {
+      await send.click();
+    } else {
+      await composer.press("Enter");
+    }
+  } else {
+    await composer.press("Enter");
+  }
+
+  const deadline = Date.now() + 180000;
+  let lastCandidate = "";
+  let stableSince = Date.now();
+
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(500);
+
+    const generating = await firstVisible(page, stopSelectors);
+    const currentText = await body.innerText().catch(() => "");
+
+    let candidate = "";
+    let newResponse = false;
+
+    // Preferir a última mensagem real do assistente quando disponível.
+    const messages = page.locator('[data-message-author-role="assistant"]');
+    const count = await messages.count().catch(() => 0);
+
+    if (count > beforeAssistantCount && count > 0) {
+      candidate = (await messages.nth(count - 1).innerText().catch(() => "")).trim();
+      newResponse = candidate.length > 0;
+    }
+
+    // Compatibilidade com interfaces que usam marcadores textuais.
+    if (!newResponse) {
+      const markers = ["ChatGPT said:", "ChatGPT disse:"];
+      let markerIndex = -1;
+      let markerLength = 0;
+
+      for (const marker of markers) {
+        const i = currentText.lastIndexOf(marker);
+        if (i > markerIndex) {
+          markerIndex = i;
+          markerLength = marker.length;
+        }
+      }
+
+      if (markerIndex >= 0) {
+        const tail = currentText.slice(markerIndex + markerLength).trim();
+        if (tail && tail !== before.trim()) {
+          candidate = tail;
+          newResponse = true;
+        }
+      }
+    }
+
+    // Último recurso: considerar apenas o texto acrescentado após o envio.
+    if (!newResponse && currentText.startsWith(before)) {
+      const appended = currentText.slice(before.length).trim();
+      if (appended.length > 10) {
+        candidate = appended;
+        newResponse = true;
+      }
+    }
+
+    let validJSON = false;
+    if (newResponse && candidate) {
+      try {
+        extractJSON(candidate);
+        validJSON = true;
+      } catch {}
+    }
+
+    if (candidate !== lastCandidate) {
+      lastCandidate = candidate;
+      stableSince = Date.now();
+    }
+
+    if (generating) stableSince = Date.now();
+
+    if (newResponse && validJSON && !generating &&
+        Date.now() - stableSince >= 1800) {
+      return candidate;
+    }
+  }
+
+  const tail = (await body.innerText().catch(() => "")).slice(-1600);
+  console.error("GRID SOUL: timeout aguardando JSON. Final da página:", tail);
+  throw new Error("Tempo esgotado aguardando JSON novo do ChatGPT.");
+}
+
+app.get("/api/health", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "GRID SOUL",
+    brain: "ChatGPT via Playwright/CDP no Chrome",
+    browserReady: Boolean(cdpBrowser && cdpBrowser.isConnected()),
+    busy
+  });
+});
+
+app.post("/api/command", async (req, res) => {
+  const message = req.body?.message;
+
+  if (typeof message !== "string" || !message.trim() || message.length > 1200) {
+    return res.status(400).json({ error: "Informe um comando de até 1200 caracteres." });
+  }
+  if (busy) {
+    return res.status(429).json({ error: "O GRID SOUL já está aguardando outra resposta do ChatGPT." });
+  }
+
+  busy = true;
+  try {
+    const prompt = [
+      "Você é o cérebro do GRID SOUL: um único enxame visual coordenado de microcubos 3D.",
+      "Responda SOMENTE com um objeto JSON válido, sem markdown ou texto externo.",
+      "Campos obrigatórios: reply, shape, population, energy, scale, rotationX, rotationY, rotationZ, moveX, moveY, moveZ, color, parts.",
+      "shape permitido: sphere, torus, spiral, wave, cloud, face, custom.",
+      "population inteiro entre 1000 e 500000; energy entre 0 e 1; scale entre 0.5 e 8.",
+      "Rotações entre -6.28 e 6.28; moveX, moveY e moveZ entre -10 e 10; color hexadecimal #RRGGBB.",
+      "parts deve ser [] exceto para shape custom. Para custom, no máximo 24 partes.",
+      "Cada parte: kind, x, y, z, sx, sy, sz, rx, ry, rz. kind: sphere, ellipsoid, torus, cylinder, cone ou box.",
+      "Posições entre -4 e 4; dimensões entre 0.05 e 3; rotações entre -6.28 e 6.28.",
+      "Não produza código executável nem comandos de sistema.",
+      "Pedido do usuário: " + message.trim()
+    ].join("\n");
+
+    const raw = await askChatGPT(prompt);
+    const plan = sanitizePlan(extractJSON(raw));
+    res.json(plan);
+  } catch (err) {
+    console.error("ChatGPT CDP bridge:", String(err.message || err).slice(0, 500));
+    res.status(502).json({
+      error: String(err.message || "Não foi possível obter um plano válido do ChatGPT.").slice(0, 300)
+    });
+  } finally {
+    busy = false;
+  }
+});
+
+app.use(express.static(path.join(ROOT, 'public')));
+
+app.listen(8765, '127.0.0.1', () => {
+  console.log('GRID SOUL: http://127.0.0.1:8765');
+  console.log('Cérebro: ChatGPT via Playwright/CDP em 127.0.0.1:9222.');
+});

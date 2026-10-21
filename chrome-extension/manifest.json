@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "GRID SOUL — Ponte local com ChatGPT",
+  "version": "1.1.1",
+  "description": "Conecta o GRID SOUL à aba normal do ChatGPT por um servidor local.",
+  "permissions": [
+    "tabs",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

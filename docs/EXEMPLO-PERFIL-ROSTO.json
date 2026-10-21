@@ -1,0 +1,84 @@
+{
+  "object": "grid_soul_humanoid",
+  "geometry": {
+    "type": "human_face",
+    "representation": "voxel_mesh",
+    "population": 88000,
+    "scale": 2.5,
+    "density": 0.92,
+    "distribution": "surface_adaptive",
+    "grid": {
+      "type": "3d_cubic_lattice",
+      "cellShape": "cube",
+      "size": 0.025,
+      "spacing": 0.004,
+      "adaptiveResolution": true,
+      "surfaceConforming": true,
+      "preserveFacialFeatures": true
+    }
+  },
+  "energy": 0.88,
+  "rotationX": -0.04,
+  "rotationY": 0.08,
+  "rotationZ": 0,
+  "moveX": 0,
+  "moveY": 0,
+  "moveZ": 0,
+  "color": "#00E5FF",
+  "materials": {
+    "base": "#005BFF",
+    "primary": "#00E5FF",
+    "secondary": "#7B2CFF",
+    "accent": "#FF38D1",
+    "highlight": "#FFD34D",
+    "metallic": 0.65,
+    "roughness": 0.22,
+    "emissiveIntensity": 1.8
+  },
+  "face": {
+    "symmetry": 0.92,
+    "eyeDetail": 1.0,
+    "noseDetail": 0.95,
+    "mouthDetail": 0.95,
+    "surfaceDisplacement": 0.035,
+    "expression": "neutral",
+    "orientation": "frontal"
+  },
+  "mesh": {
+    "connectivity": "neighbor_lattice",
+    "renderCubesIndividually": true,
+    "mergeAdjacentFaces": false,
+    "edgeDefinition": 0.08,
+    "surfaceContinuity": 0.94,
+    "lod": true
+  },
+  "particles": {
+    "enabled": true,
+    "count": 1800,
+    "distribution": "orbiting_surface",
+    "dispersion": 0.35,
+    "sizeVariation": 0.8,
+    "colors": [
+      "#00E5FF",
+      "#126BFF",
+      "#A52CFF",
+      "#FF38D1",
+      "#FFD34D"
+    ]
+  },
+  "lighting": {
+    "bloom": 1.4,
+    "contrast": 1.25,
+    "ambient": 0.12,
+    "keyLight": "#00CFFF",
+    "rimLight": "#A52CFF",
+    "background": "#020617"
+  },
+  "render": {
+    "quality": "ultra",
+    "antialiasing": true,
+    "shadows": true,
+    "depthOfField": 0.12,
+    "transparentBackground": false
+  }
+}

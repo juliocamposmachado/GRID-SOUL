@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GRID SOUL — Entidade Cognitiva</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#020711;color:#e6faff;font:14px system-ui}
+header{padding:15px 20px;border-bottom:1px solid #16374b}
+h1{font-size:19px;letter-spacing:4px;color:#48f5ff;margin:0}
+header p{color:#87a9bd;margin:5px 0 0}
+main{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:calc(100vh - 65px)}
+#stage{position:relative;min-height:620px;overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+#hint{position:absolute;bottom:12px;left:14px;color:#86b8ca;pointer-events:none}
+aside{background:#081422;border-left:1px solid #16374b;padding:18px}
+h2{font-size:12px;letter-spacing:2px;color:#48f5ff}
+textarea{width:100%;resize:vertical;background:#030b16;color:#e6faff;border:1px solid #24536a;border-radius:7px;padding:10px}
+button{width:100%;padding:11px;border:1px solid #23677e;border-radius:7px;background:#07536a;color:white;cursor:pointer;font-weight:700}
+button:disabled{opacity:.5}
+label{display:block;margin:16px 0 6px;color:#9bb9ca;font-size:12px}
+input{width:100%;accent-color:#48f5ff}
+small,#reply{color:#9bb9ca;line-height:1.7;overflow-wrap:anywhere}
+#reply{white-space:pre-wrap;max-height:180px;overflow:auto}
+.stats{margin-top:20px;padding-top:15px;border-top:1px solid #1b3548}
+@media(max-width:760px){main{grid-template-columns:1fr}#stage{min-height:55vh}aside{border:0}}
+</style>
+</head>
+<body>
+<header>
+<h1>GRID SOUL</h1>
+<p>CHATGPT É O CÉREBRO · O ENXAME É O CORPO</p>
+</header>
+<main>
+<section id="stage">
+<div id="hint">Arraste para observar · Scroll para aproximar</div>
+</section>
+<aside>
+<h2>COMUNICAR COM A ENTIDADE</h2>
+<textarea id="command" rows="4" maxlength="1200"
+placeholder="Ex.: transforme-se em uma espiral, expanda e gire para a direita."></textarea>
+<button id="send" style="margin-top:9px">Enviar ao ChatGPT</button>
+<div id="reply" aria-live="polite">Inicializando a entidade...</div>
+
+<label>População de microcubos <output id="popout">6000</output></label>
+<input id="population" type="range" min="1000" max="500000"
+step="1000" value="6000">
+
+<label>Energia coletiva <output id="energyout">0.60</output></label>
+<input id="energy" type="range" min="0" max="1" step=".05" value=".6">
+
+<div class="stats">
+<h2>ESTADO DA ENTIDADE</h2>
+<small id="state">Iniciando motor 3D...</small>
+<p><small>O limite de população representa a capacidade configurada, não um limite geométrico fixo. Aumente-o conforme o desempenho disponível.</small></p>
+</div>
+</aside>
+</main>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const stage=document.querySelector('#stage');
+const state=document.querySelector('#state');
+const reply=document.querySelector('#reply');
+const send=document.querySelector('#send');
+const populationInput=document.querySelector('#population');
+const energyInput=document.querySelector('#energy');
+const popout=document.querySelector('#popout');
+const energyout=document.querySelector('#energyout');
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color('#020711');
+scene.fog=new THREE.FogExp2('#020711',.012);
+
+const camera=new THREE.PerspectiveCamera(50,1,.1,300);
+camera.position.set(0,5,19);
+
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.4;
+stage.prepend(renderer.domElement);
+
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;
+controls.target.set(0,0,0);
+
+scene.add(new THREE.AmbientLight(0x78baff,1.3));
+const light=new THREE.PointLight(0x18dfff,180,80);
+light.position.set(4,9,8);
+scene.add(light);
+const light2=new THREE.PointLight(0x2355ff,120,80);
+light2.position.set(-8,-3,-5);
+scene.add(light2);
+
+let CAPACITY=6000;
+const MAX_PARTICLES=500000;
+const geometry=new THREE.BoxGeometry(.055,.055,.055);
+const material=new THREE.MeshStandardMaterial({
+ color:'#35eaff',emissive:'#073d58',emissiveIntensity:1.5,
+ metalness:.25,roughness:.25
+});
+let swarm=new THREE.InstancedMesh(geometry,material,CAPACITY);
+swarm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+swarm.count=6000;
+swarm.frustumCulled=false;
+scene.add(swarm);
+
+const dummy=new THREE.Object3D();
+let current=Array.from({length:CAPACITY},()=>new THREE.Vector3());
+let target=Array.from({length:CAPACITY},()=>new THREE.Vector3());
+let active=6000;
+let shape='cloud';
+let customParts=[];
+let energy=.6;
+let scale=2;
+let move=new THREE.Vector3();
+let rotation=new THREE.Euler();
+let color=new THREE.Color('#35eaff');
+let phase=0;
+let morphing=true;
+
+function rand(i,salt=0){
+ const x=Math.sin((i+1)*127.1+(salt+1)*311.7)*43758.5453;
+ return x-Math.floor(x);
+}
+
+function pointFor(i,n,form){
+ const u=(i+.5)/n;
+ const a=i*2.399963229728653;
+ const r=Math.sqrt(u);
+ let x=0,y=0,z=0;
+
+ if(form==='sphere'){
+   const yy=1-2*u, rr=Math.sqrt(1-yy*yy);
+   x=Math.cos(a)*rr; y=yy; z=Math.sin(a)*rr;
+ }else if(form==='torus'){
+   // Volume toroidal: um único enxame preenchendo o corpo do anel.
+   // A distribuição radial mantém densidade no centro e nas bordas.
+   const t=a;
+   const q=2*Math.PI*rand(i,1);
+   const rho=.38*Math.sqrt(rand(i,2));
+   x=(1+rho*Math.cos(q))*Math.cos(t);
+   y=rho*Math.sin(q);
+   z=(1+rho*Math.cos(q))*Math.sin(t);
+ }else if(form==='spiral'){
+   const t=u*Math.PI*18, r=.15+u*2.2;
+   x=r*Math.cos(t); y=(u-.5)*4; z=r*Math.sin(t);
+ }else if(form==='wave'){
+   const cols=Math.ceil(Math.sqrt(n));
+   x=((i%cols)/cols-.5)*4;
+   z=(Math.floor(i/cols)/cols-.5)*4;
+   y=.65*Math.sin(x*2.2+z*1.7);
+ }else if(form==='terrain'){
+   // Terreno procedural: um unico enxame distribuido por uma superficie.
+   const cols=Math.ceil(Math.sqrt(n));
+   const row=Math.floor(i/cols);
+   const col=i%cols;
+   const gx=(col/Math.max(1,cols-1))*2-1;
+   const gz=(row/Math.max(1,cols-1))*2-1;
+
+   const peak=(cx,cz,sx,sz)=>
+     Math.exp(-(((gx-cx)**2)/sx+((gz-cz)**2)/sz));
+
+   const tx=gx*1.7;
+   const tz=gz*1.7;
+   const ty=
+     -0.08
+     +0.16*Math.sin(gx*5.5+gz*2.2)*Math.cos(gz*4.8-gx*1.4)
+     +0.78*peak(-0.42,-0.22,0.10,0.18)
+     +0.92*peak(0.18,0.10,0.075,0.11)
+     +0.62*peak(0.62,-0.48,0.12,0.10)
+     +0.48*peak(-0.15,0.62,0.20,0.12)
+     +0.20*peak(-0.72,0.35,0.08,0.22);
+
+   return new THREE.Vector3(tx,ty,tz);
+}else if(form==='face'){
+   // Superfície facial tridimensional: testa, bochechas,
+   // cavidades oculares, ponte nasal, nariz, lábios e queixo.
+   const cols=Math.ceil(Math.sqrt(n));
+   const row=Math.floor(i/cols);
+   const col=i%cols;
+   const gx=(col/Math.max(1,cols-1))*2-1;
+   const gy=(row/Math.max(1,cols-1))*2-1;
+
+   y=gy*1.65;
+   const width=gy < -0.05
+     ? 0.55+0.45*Math.min(1,(gy+1)/0.95)
+     : 0.88+0.12*Math.cos((gy/1.05)*Math.PI/2);
+
+   let x=gx*1.28*width;
+   const gauss=(v,s)=>Math.exp(-(v*v)/s);
+
+   // Volume da face e do crânio.
+   z=0.08+0.42*Math.sqrt(Math.max(
+     0.025,1-gx*gx*0.72-gy*gy*0.82
+   ));
+
+   // Maçãs do rosto e testa.
+   z+=0.065*gauss(Math.abs(x)-0.68,0.10)*gauss(y-0.02,0.30);
+   z+=0.035*gauss(x,0.55)*gauss(y-1.05,0.18);
+
+   // Cavidades dos olhos e sobrancelhas.
+   const eyeL=gauss(x+0.45,0.045)*gauss(y-0.43,0.035);
+   const eyeR=gauss(x-0.45,0.045)*gauss(y-0.43,0.035);
+   z-=0.17*(eyeL+eyeR);
+   z+=0.085*gauss(x+0.45,0.12)*gauss(y-0.66,0.022);
+   z+=0.085*gauss(x-0.45,0.12)*gauss(y-0.66,0.022);
+
+   // Ponte e ponta do nariz.
+   z+=0.19*gauss(x,0.025)*gauss(y-0.02,0.24);
+   z+=0.22*gauss(x,0.055)*gauss(y+0.20,0.045);
+   z-=0.075*gauss(x+0.14,0.012)*gauss(y+0.32,0.012);
+   z-=0.075*gauss(x-0.14,0.012)*gauss(y+0.32,0.012);
+
+   // Sulco da boca e volume dos lábios.
+   z+=0.065*gauss(x,0.13)*gauss(y+0.62,0.012);
+   z-=0.045*gauss(x,0.12)*gauss(y+0.69,0.004);
+   z+=0.055*gauss(x,0.14)*gauss(y+0.77,0.014);
+
+   // Pequenas irregularidades para evitar aparência mecânica.
+   x+=(rand(i,31)-0.5)*0.012;
+   z+=(rand(i,33)-0.5)*0.025;
+ }else if(form==='custom' && customParts.length){
+   const part=customParts[i%customParts.length];
+   const localI=Math.floor(i/customParts.length);
+   const localN=Math.max(1,Math.ceil(n/customParts.length));
+   const v=(localI+.5)/localN;
+   const angle=localI*2.399963229728653;
+   let vx=0,vy=0,vz=0;
+
+   if(part.kind==='sphere'||part.kind==='ellipsoid'){
+     vy=1-2*v;
+     const ring=Math.sqrt(Math.max(0,1-vy*vy));
+     vx=Math.cos(angle)*ring;
+     vz=Math.sin(angle)*ring;
+   }else if(part.kind==='box'){
+     vx=rand(localI,11)*2-1;
+     vy=rand(localI,12)*2-1;
+     vz=rand(localI,13)*2-1;
+   }else if(part.kind==='torus'){
+     const tube=Math.sqrt(v)*Math.PI*2;
+     vx=(0.72+0.25*Math.cos(tube))*Math.cos(angle);
+     vy=0.25*Math.sin(tube);
+     vz=(0.72+0.25*Math.cos(tube))*Math.sin(angle);
+   }else if(part.kind==='cylinder'){
+     const radius=Math.sqrt(v);
+     vx=radius*Math.cos(angle);
+     vy=rand(localI,14)*2-1;
+     vz=radius*Math.sin(angle);
+   }else if(part.kind==='cone'){
+     const radius=Math.sqrt(v);
+     vy=1-2*v;
+     const coneRadius=(1-vy)/2;
+     vx=coneRadius*Math.cos(angle);
+     vz=coneRadius*Math.sin(angle);
+   }
+
+   const point=new THREE.Vector3(
+     vx*part.sx,
+     vy*part.sy,
+     vz*part.sz
+   );
+   point.applyEuler(new THREE.Euler(part.rx,part.ry,part.rz));
+   point.add(new THREE.Vector3(part.x,part.y,part.z));
+   x=point.x;
+   y=point.y;
+   z=point.z;
+ }else{
+   const rr=Math.cbrt(u)*1.9;
+   x=rr*Math.cos(a)*Math.sqrt(1-rand(i,2)*.25);
+   y=rr*(rand(i,3)*2-1);
+   z=rr*Math.sin(a)*Math.sqrt(1-rand(i,4)*.25);
+ }
+ return new THREE.Vector3(x,y,z);
+}
+
+function ensureCapacity(required){
+ if(!Number.isSafeInteger(required)||required<1||required>MAX_PARTICLES){
+   throw new Error('Quantidade de partículas fora do limite de segurança (500.000).');
+ }
+ if(required<=CAPACITY)return;
+
+ const nextCapacity=Math.min(
+   MAX_PARTICLES,
+   Math.max(required,Math.ceil(CAPACITY*1.5))
+ );
+
+ const nextSwarm=new THREE.InstancedMesh(geometry,material,nextCapacity);
+ nextSwarm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+ nextSwarm.count=0;
+ nextSwarm.frustumCulled=false;
+
+ scene.remove(swarm);
+ swarm=nextSwarm;
+ scene.add(swarm);
+
+ current=Array.from({length:nextCapacity},()=>new THREE.Vector3());
+ target=Array.from({length:nextCapacity},()=>new THREE.Vector3());
+ CAPACITY=nextCapacity;
+ populationInput.max=String(MAX_PARTICLES);
+}
+
+function buildTargets(){
+ active=Math.round(Math.max(1000,Math.min(MAX_PARTICLES,active)));
+ ensureCapacity(active);
+ for(let i=0;i<active;i++){
+   target[i].copy(pointFor(i,active,shape)).multiplyScalar(scale);
+ }
+ swarm.count=active;
+ swarm.instanceMatrix.needsUpdate=true;
+ morphing=true;
+ popout.value=active;
+ populationInput.value=active;
+ state.textContent=`Enxame: ${active.toLocaleString('pt-BR')} microcubos · forma: ${shape}`;
+}
+
+function applyPlan(p){
+ customParts=Array.isArray(p.parts)?p.parts:[];
+ shape=p.shape;
+ active=Math.round(Math.max(1000,Math.min(MAX_PARTICLES,p.population)));
+ energy=p.energy;
+ scale=p.scale;
+ move.set(p.moveX,p.moveY,p.moveZ);
+ rotation.set(p.rotationX,p.rotationY,p.rotationZ);
+ color.set(p.color);
+ energyInput.value=energy;
+ energyout.value=energy.toFixed(2);
+ buildTargets();
+ reply.textContent=p.reply;
+}
+
+function presets(form){
+ shape=form;
+ buildTargets();
+}
+
+populationInput.addEventListener('input',()=>{
+ active=Math.min(MAX_PARTICLES,Number(populationInput.value));
+ ensureCapacity(active);
+ popout.value=active;
+ buildTargets();
+});
+energyInput.addEventListener('input',()=>{
+ energy=Number(energyInput.value);
+ energyout.value=energy.toFixed(2);
+});
+
+send.addEventListener('click',async()=>{
+ const message=document.querySelector('#command').value.trim();
+ if(!message||send.disabled)return;
+ send.disabled=true;
+ state.textContent='ChatGPT está planejando a transformação...';
+ try{
+   const response=await fetch('/api/command',{
+     method:'POST',
+     headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({message})
+   });
+   const data=await response.json();
+   if(!response.ok)throw new Error(data.error||'Erro na API');
+   applyPlan(data);
+ }catch(e){
+   reply.textContent='Erro: '+e.message;
+   state.textContent='Aguardando correção';
+ }finally{
+   send.disabled=false;
+ }
+});
+
+document.querySelector('#command').addEventListener('keydown',e=>{
+ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send.click();}
+});
+
+function resize(){
+ const w=stage.clientWidth,h=stage.clientHeight;
+ if(!w||!h)return;
+ camera.aspect=w/h;
+ camera.updateProjectionMatrix();
+ renderer.setSize(w,h,false);
+}
+new ResizeObserver(resize).observe(stage);
+resize();
+buildTargets();
+
+function animate(){
+ requestAnimationFrame(animate);
+ phase+=.012*(.25+energy);
+ for(let i=0;i<active;i++){
+   const t=target[i];
+   const wobble=energy*.025;
+   const tx=t.x+Math.sin(phase+i*.013)*wobble;
+   const ty=t.y+Math.cos(phase+i*.017)*wobble;
+   const tz=t.z+Math.sin(phase+i*.011)*wobble;
+   current[i].x+=(tx-current[i].x)*.045;
+   current[i].y+=(ty-current[i].y)*.045;
+   current[i].z+=(tz-current[i].z)*.045;
+
+   dummy.position.copy(current[i]);
+   dummy.position.applyEuler(rotation);
+   dummy.position.add(move);
+   const s=.7+energy*.5;
+   dummy.scale.setScalar(s);
+   dummy.updateMatrix();
+   swarm.setMatrixAt(i,dummy.matrix);
+ }
+ material.color.copy(color);
+ material.emissive.copy(color).multiplyScalar(.24);
+ swarm.instanceMatrix.needsUpdate=true;
+ controls.update();
+ renderer.render(scene,camera);
+}
+animate();
+state.textContent='Motor 3D operacional · aguardando o cérebro ChatGPT';
+</script>
+</body>
+</html>

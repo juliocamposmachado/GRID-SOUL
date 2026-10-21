@@ -1,0 +1,192 @@
+import 'dotenv/config';
+import express from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { GoogleGenAI } from '@google/genai';
+
+if (!process.env.GEMINI_API_KEY) {
+  console.error('Configure GEMINI_API_KEY no arquivo .env');
+  process.exit(1);
+}
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
+
+const app = express();
+app.disable('x-powered-by');
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.json({ limit: '8kb' }));
+app.use('/api/', rateLimit({
+  windowMs: 60_000,
+  limit: 12
+}));
+
+const shapes = [
+  'sphere', 'torus', 'spiral', 'wave', 'cloud', 'face', 'custom'
+];
+
+const partKinds = [
+  'sphere', 'ellipsoid', 'torus', 'cylinder', 'cone', 'box'
+];
+
+const schema = {
+  type: 'OBJECT',
+  properties: {
+    reply: { type: 'STRING' },
+    shape: { type: 'STRING', enum: shapes },
+    population: { type: 'INTEGER' },
+    energy: { type: 'NUMBER' },
+    scale: { type: 'NUMBER' },
+    rotationX: { type: 'NUMBER' },
+    rotationY: { type: 'NUMBER' },
+    rotationZ: { type: 'NUMBER' },
+    moveX: { type: 'NUMBER' },
+    moveY: { type: 'NUMBER' },
+    moveZ: { type: 'NUMBER' },
+    color: { type: 'STRING' },
+    parts: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          kind: { type: 'STRING', enum: partKinds },
+          x: { type: 'NUMBER' },
+          y: { type: 'NUMBER' },
+          z: { type: 'NUMBER' },
+          sx: { type: 'NUMBER' },
+          sy: { type: 'NUMBER' },
+          sz: { type: 'NUMBER' },
+          rx: { type: 'NUMBER' },
+          ry: { type: 'NUMBER' },
+          rz: { type: 'NUMBER' }
+        },
+        required: [
+          'kind', 'x', 'y', 'z', 'sx', 'sy', 'sz', 'rx', 'ry', 'rz'
+        ],
+        propertyOrdering: [
+          'kind', 'x', 'y', 'z', 'sx', 'sy', 'sz', 'rx', 'ry', 'rz'
+        ]
+      }
+    }
+  },
+  required: [
+    'reply', 'shape', 'population', 'energy', 'scale',
+    'rotationX', 'rotationY', 'rotationZ',
+    'moveX', 'moveY', 'moveZ', 'color'
+  ],
+  propertyOrdering: [
+    'reply', 'shape', 'population', 'energy', 'scale',
+    'rotationX', 'rotationY', 'rotationZ',
+    'moveX', 'moveY', 'moveZ', 'color'
+  ]
+};
+
+const clamp = (v, min, max, fallback) => {
+  const n = Number(v);
+  return Number.isFinite(n)
+    ? Math.max(min, Math.min(max, n))
+    : fallback;
+};
+
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, service: 'GRID SOUL', brain: 'Gemini' });
+});
+
+app.post('/api/command', async (req, res) => {
+  const message = req.body?.message;
+
+  if (typeof message !== 'string' ||
+      !message.trim() || message.length > 1200) {
+    return res.status(400).json({
+      error: 'Informe um comando de até 1200 caracteres.'
+    });
+  }
+
+  try {
+    const result = await ai.models.generateContent({
+      model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
+      contents: [
+        'Você é o cérebro de GRID SOUL. O enxame de microcubos é UM ÚNICO CORPO VISUAL.',
+        'Escolha uma forma e planeje a transformação espacial solicitada.',
+        'Você controla o objetivo geométrico, a população desejada, a energia, a escala, a orientação e a posição global.',
+        'Formas permitidas: sphere, torus, spiral, wave, cloud, face, custom.',
+        'Quando o usuário pedir um rosto ou humanoide holográfico, escolha shape face.',
+        'A forma face representa uma cabeça humana vista de frente, com volume, cavidades dos olhos, sobrancelhas, nariz, maçãs do rosto, lábios e queixo.',
+        'Para custom, crie de 1 a 24 partes geométricas que, juntas, formem UMA única figura.',
+        'Tipos de parte: sphere, ellipsoid, torus, cylinder, cone, box.',
+        'Cada parte exige kind, x, y, z, sx, sy, sz, rx, ry, rz.',
+        'x, y, z são posições entre -4 e 4; sx, sy, sz são dimensões entre 0.05 e 3.',
+        'rx, ry, rz são rotações em radianos entre -6.28 e 6.28.',
+        'Distribua as partes para desenhar o objeto solicitado; use formas simples para cabeça, corpo, membros, asas, cauda, letras ou outros detalhes.',
+        'Para formas predefinidas, parts deve ser uma lista vazia.', 
+        'population: inteiro entre 1000 e 500000, escolhido conforme a complexidade visual.',
+        'energy: número de 0 a 1.',
+        'scale: número de 0.5 a 8.',
+        'rotações em radianos entre -6.28 e 6.28.',
+        'moveX, moveY, moveZ: números entre -10 e 10.',
+        'color: hexadecimal #RRGGBB.',
+        'Responda em português. Não produza código executável. Não alegue controlar hardware externo.',
+        'Comando recebido: ' + message.trim()
+      ].join('\n'),
+      config: {
+        responseMimeType: 'application/json',
+        responseJsonSchema: schema,
+        temperature: 0.5
+      }
+    });
+
+    const p = JSON.parse(result.text);
+    const color = /^#[0-9a-fA-F]{6}$/.test(p.color)
+      ? p.color : '#35eaff';
+
+    const sanitizedParts = (Array.isArray(p.parts) ? p.parts : [])
+      .slice(0, 24)
+      .filter(part => part && partKinds.includes(part.kind))
+      .map(part => ({
+        kind: part.kind,
+        x: clamp(part.x, -4, 4, 0),
+        y: clamp(part.y, -4, 4, 0),
+        z: clamp(part.z, -4, 4, 0),
+        sx: clamp(part.sx, 0.05, 3, 1),
+        sy: clamp(part.sy, 0.05, 3, 1),
+        sz: clamp(part.sz, 0.05, 3, 1),
+        rx: clamp(part.rx, -6.28, 6.28, 0),
+        ry: clamp(part.ry, -6.28, 6.28, 0),
+        rz: clamp(part.rz, -6.28, 6.28, 0)
+      }));
+
+    const safeShape =
+      p.shape === 'custom' && sanitizedParts.length === 0
+        ? 'cloud'
+        : (shapes.includes(p.shape) ? p.shape : 'cloud');
+
+    res.json({
+      reply: String(p.reply).slice(0, 700),
+      shape: safeShape,
+      population: Math.round(clamp(p.population, 1000, 500000, 6000)),
+      energy: clamp(p.energy, 0, 1, 0.6),
+      scale: clamp(p.scale, 0.5, 8, 2),
+      rotationX: clamp(p.rotationX, -6.28, 6.28, 0),
+      rotationY: clamp(p.rotationY, -6.28, 6.28, 0),
+      rotationZ: clamp(p.rotationZ, -6.28, 6.28, 0),
+      moveX: clamp(p.moveX, -10, 10, 0),
+      moveY: clamp(p.moveY, -10, 10, 0),
+      moveZ: clamp(p.moveZ, -10, 10, 0),
+      color,
+      parts: sanitizedParts
+    });
+  } catch (err) {
+    console.error('Gemini:', err.message);
+    res.status(502).json({
+      error: 'Falha na API Gemini. Confira a chave, o modelo e a conexão.'
+    });
+  }
+});
+
+app.use(express.static('public'));
+
+app.listen(8765, '127.0.0.1', () => {
+  console.log('GRID SOUL: http://127.0.0.1:8765');
+  console.log('Cérebro Gemini conectado ao backend.');
+});

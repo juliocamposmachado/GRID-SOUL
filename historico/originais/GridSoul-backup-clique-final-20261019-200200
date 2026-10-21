@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GRID SOUL — Entidade Cognitiva</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#020711;color:#e6faff;font:14px system-ui}
+header{padding:15px 20px;border-bottom:1px solid #16374b}
+h1{font-size:19px;letter-spacing:4px;color:#48f5ff;margin:0}
+header p{color:#87a9bd;margin:5px 0 0}
+main{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:calc(100vh - 65px)}
+#stage{position:relative;min-height:620px;overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+#hint{position:absolute;bottom:12px;left:14px;color:#86b8ca;pointer-events:none}
+aside{background:#081422;border-left:1px solid #16374b;padding:18px}
+h2{font-size:12px;letter-spacing:2px;color:#48f5ff}
+textarea{width:100%;resize:vertical;background:#030b16;color:#e6faff;border:1px solid #24536a;border-radius:7px;padding:10px}
+button{width:100%;padding:11px;border:1px solid #23677e;border-radius:7px;background:#07536a;color:white;cursor:pointer;font-weight:700}
+button:disabled{opacity:.5}
+label{display:block;margin:16px 0 6px;color:#9bb9ca;font-size:12px}
+input{width:100%;accent-color:#48f5ff}
+small,#reply{color:#9bb9ca;line-height:1.7;overflow-wrap:anywhere}
+#reply{white-space:pre-wrap;max-height:180px;overflow:auto}
+.stats{margin-top:20px;padding-top:15px;border-top:1px solid #1b3548}
+@media(max-width:760px){main{grid-template-columns:1fr}#stage{min-height:55vh}aside{border:0}}
+</style>
+</head>
+<body>
+<header>
+<h1>GRID SOUL</h1>
+<p>CHATGPT É O CÉREBRO · O ENXAME É O CORPO</p>
+</header>
+<main>
+<section id="stage">
+<div id="hint">Arraste para observar · Scroll para aproximar</div>
+</section>
+<aside>
+<h2>COMUNICAR COM A ENTIDADE</h2>
+<textarea id="command" rows="4" maxlength="1200"
+placeholder="Ex.: transforme-se em uma espiral, expanda e gire para a direita."></textarea>
+<button id="send" style="margin-top:9px">Enviar ao ChatGPT</button>
+<div id="reply" aria-live="polite">Inicializando a entidade...</div>
+
+<label>População de microcubos <output id="popout">6000</output></label>
+<input id="population" type="range" min="1000" max="500000"
+step="1000" value="6000">
+
+<label>Energia coletiva <output id="energyout">0.60</output></label>
+<input id="energy" type="range" min="0" max="1" step=".05" value=".6">
+
+<div class="stats">
+<h2>ESTADO DA ENTIDADE</h2>
+<small id="state">Iniciando motor 3D...</small>
+<p><small>O limite de população representa a capacidade configurada, não um limite geométrico fixo. Aumente-o conforme o desempenho disponível.</small></p>
+</div>
+</aside>
+</main>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const stage=document.querySelector('#stage');
+const state=document.querySelector('#state');
+const reply=document.querySelector('#reply');
+const send=document.querySelector('#send');
+const populationInput=document.querySelector('#population');
+const energyInput=document.querySelector('#energy');
+const popout=document.querySelector('#popout');
+const energyout=document.querySelector('#energyout');
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color('#020711');
+scene.fog=new THREE.FogExp2('#020711',.012);
+
+const camera=new THREE.PerspectiveCamera(50,1,.1,300);
+camera.position.set(0,5,19);
+
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.4;
+stage.prepend(renderer.domElement);
+
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;
+controls.target.set(0,0,0);
+
+scene.add(new THREE.AmbientLight(0x78baff,1.3));
+const light=new THREE.PointLight(0x18dfff,180,80);
+light.position.set(4,9,8);
+scene.add(light);
+const light2=new THREE.PointLight(0x2355ff,120,80);
+light2.position.set(-8,-3,-5);
+scene.add(light2);
+
+let CAPACITY=6000;
+const MAX_PARTICLES=500000;
+const geometry=new THREE.BoxGeometry(.055,.055,.055);
+const material=new THREE.MeshStandardMaterial({
+ color:'#35eaff',emissive:'#073d58',emissiveIntensity:1.5,
+ metalness:.25,roughness:.25
+});
+let swarm=new THREE.InstancedMesh(geometry,material,CAPACITY);
+swarm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+swarm.count=6000;
+swarm.frustumCulled=false;
+scene.add(swarm);
+
+const dummy=new THREE.Object3D();
+let current=Array.from({length:CAPACITY},()=>new THREE.Vector3());
+let target=Array.from({length:CAPACITY},()=>new THREE.Vector3());
+// Velocidade persistente: dá inércia ao enxame sem criar objetos por quadro.
+let velocity=Array.from({length:CAPACITY},()=>new THREE.Vector3());
+let active=6000;
+let shape='cloud';
+let customParts=[];
+let energy=.6;
+let scale=2;
+let move=new THREE.Vector3();
+let rotation=new THREE.Euler();
+let color=new THREE.Color('#35eaff');
+let paletteMode='single';
+let phase=0;
+let morphing=true;
+
+function rand(i,salt=0){
+ const x=Math.sin((i+1)*127.1+(salt+1)*311.7)*43758.5453;
+ return x-Math.floor(x);
+}
+
+function pointFor(i,n,form){
+ const u=(i+.5)/n;
+ const a=i*2.399963229728653;
+ const r=Math.sqrt(u);
+ let x=0,y=0,z=0;
+
+ if(form==='sphere'){
+   const yy=1-2*u, rr=Math.sqrt(1-yy*yy);
+   x=Math.cos(a)*rr; y=yy; z=Math.sin(a)*rr;
+ }else if(form==='torus'){
+   // Volume toroidal: um único enxame preenchendo o corpo do anel.
+   // A distribuição radial mantém densidade no centro e nas bordas.
+   const t=a;
+   const q=2*Math.PI*rand(i,1);
+   const rho=.38*Math.sqrt(rand(i,2));
+   x=(1+rho*Math.cos(q))*Math.cos(t);
+   y=rho*Math.sin(q);
+   z=(1+rho*Math.cos(q))*Math.sin(t);
+ }else if(form==='spiral'){
+   const t=u*Math.PI*18, r=.15+u*2.2;
+   x=r*Math.cos(t); y=(u-.5)*4; z=r*Math.sin(t);
+ }else if(form==='wave'){
+   const cols=Math.ceil(Math.sqrt(n));
+   x=((i%cols)/cols-.5)*4;
+   z=(Math.floor(i/cols)/cols-.5)*4;
+   y=.65*Math.sin(x*2.2+z*1.7);
+ }else if(form==='terrain'){
+   // Terreno procedural: um unico enxame distribuido por uma superficie.
+   const cols=Math.ceil(Math.sqrt(n));
+   const row=Math.floor(i/cols);
+   const col=i%cols;
+   const gx=(col/Math.max(1,cols-1))*2-1;
+   const gz=(row/Math.max(1,cols-1))*2-1;
+
+   const peak=(cx,cz,sx,sz)=>
+     Math.exp(-(((gx-cx)**2)/sx+((gz-cz)**2)/sz));
+
+   const tx=gx*1.7;
+   const tz=gz*1.7;
+   const ty=
+     -0.08
+     +0.16*Math.sin(gx*5.5+gz*2.2)*Math.cos(gz*4.8-gx*1.4)
+     +0.78*peak(-0.42,-0.22,0.10,0.18)
+     +0.92*peak(0.18,0.10,0.075,0.11)
+     +0.62*peak(0.62,-0.48,0.12,0.10)
+     +0.48*peak(-0.15,0.62,0.20,0.12)
+     +0.20*peak(-0.72,0.35,0.08,0.22);
+
+   return new THREE.Vector3(tx,ty,tz);
+}else if(form==='face'){
+   // Superfície facial tridimensional: testa, bochechas,
+   // cavidades oculares, ponte nasal, nariz, lábios e queixo.
+   const cols=Math.ceil(Math.sqrt(n));
+   const row=Math.floor(i/cols);
+   const col=i%cols;
+   const gx=(col/Math.max(1,cols-1))*2-1;
+   const gy=(row/Math.max(1,cols-1))*2-1;
+
+   y=gy*1.65;
+   const width=gy < -0.05
+     ? 0.55+0.45*Math.min(1,(gy+1)/0.95)
+     : 0.88+0.12*Math.cos((gy/1.05)*Math.PI/2);
+
+   let x=gx*1.28*width;
+   const gauss=(v,s)=>Math.exp(-(v*v)/s);
+
+   // Volume da face e do crânio.
+   z=0.08+0.42*Math.sqrt(Math.max(
+     0.025,1-gx*gx*0.72-gy*gy*0.82
+   ));
+
+   // Maçãs do rosto e testa.
+   z+=0.065*gauss(Math.abs(x)-0.68,0.10)*gauss(y-0.02,0.30);
+   z+=0.035*gauss(x,0.55)*gauss(y-1.05,0.18);
+
+   // Cavidades dos olhos e sobrancelhas.
+   const eyeL=gauss(x+0.45,0.045)*gauss(y-0.43,0.035);
+   const eyeR=gauss(x-0.45,0.045)*gauss(y-0.43,0.035);
+   z-=0.17*(eyeL+eyeR);
+   z+=0.085*gauss(x+0.45,0.12)*gauss(y-0.66,0.022);
+   z+=0.085*gauss(x-0.45,0.12)*gauss(y-0.66,0.022);
+
+   // Ponte e ponta do nariz.
+   z+=0.19*gauss(x,0.025)*gauss(y-0.02,0.24);
+   z+=0.22*gauss(x,0.055)*gauss(y+0.20,0.045);
+   z-=0.075*gauss(x+0.14,0.012)*gauss(y+0.32,0.012);
+   z-=0.075*gauss(x-0.14,0.012)*gauss(y+0.32,0.012);
+
+   // Sulco da boca e volume dos lábios.
+   z+=0.065*gauss(x,0.13)*gauss(y+0.62,0.012);
+   z-=0.045*gauss(x,0.12)*gauss(y+0.69,0.004);
+   z+=0.055*gauss(x,0.14)*gauss(y+0.77,0.014);
+
+   // Pequenas irregularidades para evitar aparência mecânica.
+   x+=(rand(i,31)-0.5)*0.012;
+   z+=(rand(i,33)-0.5)*0.025;
+ }else if(form==='custom' && customParts.length){
+   const part=customParts[i%customParts.length];
+   const localI=Math.floor(i/customParts.length);
+   const localN=Math.max(1,Math.ceil(n/customParts.length));
+   const v=(localI+.5)/localN;
+   const angle=localI*2.399963229728653;
+   let vx=0,vy=0,vz=0;
+
+   if(part.kind==='sphere'||part.kind==='ellipsoid'){
+     vy=1-2*v;
+     const ring=Math.sqrt(Math.max(0,1-vy*vy));
+     vx=Math.cos(angle)*ring;
+     vz=Math.sin(angle)*ring;
+   }else if(part.kind==='box'){
+     vx=rand(localI,11)*2-1;
+     vy=rand(localI,12)*2-1;
+     vz=rand(localI,13)*2-1;
+   }else if(part.kind==='torus'){
+     const tube=Math.sqrt(v)*Math.PI*2;
+     vx=(0.72+0.25*Math.cos(tube))*Math.cos(angle);
+     vy=0.25*Math.sin(tube);
+     vz=(0.72+0.25*Math.cos(tube))*Math.sin(angle);
+   }else if(part.kind==='cylinder'){
+     const radius=Math.sqrt(v);
+     vx=radius*Math.cos(angle);
+     vy=rand(localI,14)*2-1;
+     vz=radius*Math.sin(angle);
+   }else if(part.kind==='cone'){
+     const radius=Math.sqrt(v);
+     vy=1-2*v;
+     const coneRadius=(1-vy)/2;
+     vx=coneRadius*Math.cos(angle);
+     vz=coneRadius*Math.sin(angle);
+   }
+
+   const point=new THREE.Vector3(
+     vx*part.sx,
+     vy*part.sy,
+     vz*part.sz
+   );
+   point.applyEuler(new THREE.Euler(part.rx,part.ry,part.rz));
+   point.add(new THREE.Vector3(part.x,part.y,part.z));
+   x=point.x;
+   y=point.y;
+   z=point.z;
+ }else{
+   const rr=Math.cbrt(u)*1.9;
+   x=rr*Math.cos(a)*Math.sqrt(1-rand(i,2)*.25);
+   y=rr*(rand(i,3)*2-1);
+   z=rr*Math.sin(a)*Math.sqrt(1-rand(i,4)*.25);
+ }
+ return new THREE.Vector3(x,y,z);
+}
+
+function ensureCapacity(required){
+ if(!Number.isSafeInteger(required)||required<1||required>MAX_PARTICLES){
+   throw new Error('Quantidade de partículas fora do limite de segurança (500.000).');
+ }
+ if(required<=CAPACITY)return;
+
+ const nextCapacity=Math.min(
+   MAX_PARTICLES,
+   Math.max(required,Math.ceil(CAPACITY*1.5))
+ );
+
+ const nextSwarm=new THREE.InstancedMesh(geometry,material,nextCapacity);
+ nextSwarm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+ nextSwarm.count=0;
+ nextSwarm.frustumCulled=false;
+
+ scene.remove(swarm);
+ swarm=nextSwarm;
+ scene.add(swarm);
+
+ current=Array.from({length:nextCapacity},()=>new THREE.Vector3());
+ target=Array.from({length:nextCapacity},()=>new THREE.Vector3());
+ velocity=Array.from({length:nextCapacity},()=>new THREE.Vector3());
+ CAPACITY=nextCapacity;
+ populationInput.max=String(MAX_PARTICLES);
+}
+
+
+// GRID_SOUL_PERIODIC_TABLE_V1
+let gsPeriodicMode = false;
+let gsPeriodicLabels = null;
+let gsPeriodicElements = [];
+
+function gsPeriodicPosition(e) {
+  return {
+    x: (e.group - 9.5) * 0.72,
+    y: (4.5 - e.period) * 0.72,
+    z: 0
+  };
+}
+
+function gsBuildPeriodicLabels() {
+  if (gsPeriodicLabels) {
+    gsPeriodicLabels.visible = true;
+    return;
+  }
+  gsPeriodicLabels = new THREE.Group();
+  gsPeriodicLabels.name = 'GRID_SOUL_PERIODIC_TABLE_LABELS';
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 160;
+  const ctx = canvas.getContext('2d');
+
+  for (const e of gsPeriodicElements) {
+    const p = gsPeriodicPosition(e);
+    ctx.clearRect(0, 0, 256, 160);
+    ctx.fillStyle = '#061522';
+    ctx.fillRect(8, 8, 240, 144);
+    ctx.strokeStyle = '#26eaff';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(8, 8, 240, 144);
+    ctx.fillStyle = '#8eefff';
+    ctx.font = '24px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(String(e.z), 20, 36);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 64px sans-serif';
+    ctx.fillText(e.s, 128, 100);
+    ctx.fillStyle = '#8eefff';
+    ctx.font = '18px sans-serif';
+    ctx.fillText(e.n, 128, 132);
+
+    const texture = new THREE.CanvasTexture(canvas.cloneNode
+      ? (() => {
+          const c = document.createElement('canvas');
+          c.width = canvas.width;
+          c.height = canvas.height;
+          c.getContext('2d').drawImage(canvas, 0, 0);
+          return c;
+        })()
+      : canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const material = new THREE.SpriteMaterial({
+      map: texture, transparent: true, depthTest: false
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.position.set(p.x, p.y, 0.12);
+    sprite.scale.set(0.64, 0.40, 1);
+    sprite.userData.element = e;
+    gsPeriodicLabels.add(sprite);
+  }
+  scene.add(gsPeriodicLabels);
+}
+
+function gsLoadPeriodicCatalog() {
+  import('/components/periodic_table.js').then(module => {
+    gsPeriodicElements = module.GRID_SOUL_ELEMENTS.map(e => ({
+      s: e.symbol, n: e.name, z: e.z, a: e.mass,
+      period: e.period, group: e.group
+    }));
+    if (gsElements.length !== 118) {
+      gsElements.splice(0, gsElements.length, ...gsPeriodicElements);
+    }
+    gsElement = gsPeriodicElements.find(e => e.s === 'C') || gsElements[0];
+    console.info('GRID SOUL: catálogo periódico carregado:', gsPeriodicElements.length);
+  }).catch(error => {
+    console.error('GRID SOUL: catálogo periódico não carregado', error);
+  });
+}
+gsLoadPeriodicCatalog();
+
+function buildTargets(){
+ active=Math.round(Math.max(1000,Math.min(MAX_PARTICLES,active)));
+ ensureCapacity(active);
+ for(let i=0;i<active;i++){
+   if (gsPeriodicMode && gsPeriodicElements.length === 118) {
+     const e = gsPeriodicElements[i % 118];
+     const p = gsPeriodicPosition(e);
+     const layer = Math.floor(i / 118);
+     const angle = layer * 2.399963229728653;
+     const radius = 0.055 * Math.sqrt(layer);
+     target[i].set(
+       p.x + Math.cos(angle) * radius,
+       p.y + Math.sin(angle) * radius,
+       p.z + ((layer % 5) - 2) * 0.035
+     );
+   } else {
+     target[i].copy(pointFor(i,active,shape)).multiplyScalar(scale);
+   }
+ }
+ swarm.count=active;
+ swarm.instanceMatrix.needsUpdate=true;
+ morphing=true;
+ popout.value=active;
+ populationInput.value=active;
+ updateSwarmColors();
+ state.textContent=`Enxame: ${active.toLocaleString('pt-BR')} microcubos · forma: ${shape}`;
+}
+
+function persistCurrentState(){
+ const plan={
+   reply:reply.textContent||'Estado visual restaurado.',
+   shape, population:active, energy, scale,
+   rotationX:rotation.x, rotationY:rotation.y, rotationZ:rotation.z,
+   moveX:move.x, moveY:move.y, moveZ:move.z,
+   color:'#'+color.getHexString(), parts:customParts
+ };
+ fetch('/api/memory/state',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({command:document.querySelector('#command').value,plan})
+ }).catch(()=>{});
+}
+
+function applyPlan(p){
+ customParts=Array.isArray(p.parts)?p.parts:[];
+ const requestedCommand=document.querySelector('#command').value;
+ shape=/\bterrain\b|terreno/i.test(requestedCommand)?'terrain':p.shape;
+ active=Math.round(Math.max(1000,Math.min(MAX_PARTICLES,p.population)));
+ energy=p.energy;
+ scale=p.scale;
+ move.set(p.moveX,p.moveY,p.moveZ);
+ rotation.set(p.rotationX,p.rotationY,p.rotationZ);
+ color.set(p.color);
+ const detectedPalette=detectPalette(requestedCommand);
+ if(detectedPalette) paletteMode=detectedPalette;
+ updateSwarmColors();
+ energyInput.value=energy;
+ energyout.value=energy.toFixed(2);
+ buildTargets();
+ reply.textContent=p.reply;
+ persistCurrentState();
+}
+
+
+
+function detectPalette(command){
+ const s=String(command||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+
+ if(/\b(arco.?iris|rainbow|multicolor|multicor|varias cores|muitas cores|todas as cores)\b/.test(s)) return 'rainbow';
+ if(/\b(plasma|roxo|violeta|magenta|purple)\b/.test(s)) return 'plasma';
+ if(/\b(fogo|chamas|incendio|laranja|vermelho|fire)\b/.test(s)) return 'fire';
+ if(/\b(verde|neon green|verde neon)\b/.test(s)) return 'green';
+ if(/\b(ciano|azul|azul eletrico|cyan|azul neon)\b/.test(s)) return 'cyan';
+ if(/\b(cor unica|uma unica cor|monocromatico|monocromatica|voltar a cor original|cor original)\b/.test(s)) return 'single';
+
+ return null;
+}
+
+
+function gsSetPeriodicElementColor(targetColor, element) {
+ const colors = {
+   H:'#e8f2ff', He:'#c8d8ff',
+   C:'#687784', N:'#3978e8', O:'#ff4545',
+   S:'#ffd43b', P:'#ff9638',
+   Cu:'#b87333', Au:'#ffd700', Ag:'#c0c0c0',
+   Fe:'#89939d', Al:'#aebbc7', Zn:'#a5b9c7',
+   Hg:'#a8c8d8', Pb:'#77818c',
+   Cl:'#42d66b', Br:'#a65b36', I:'#9b59b6',
+   Na:'#ab8cff', K:'#c28aff', Ca:'#72c7b1',
+   Li:'#ff8fba', F:'#7de8a1',
+   Si:'#e0b0ff', B:'#e7a0cf'
+ };
+ if (colors[element.s]) {
+   targetColor.set(colors[element.s]);
+ } else {
+   const hue = ((element.z * 137.508) % 360) / 360;
+   targetColor.setHSL(hue, 0.78, 0.54);
+ }
+}
+
+function updateSwarmColors(){
+ const c=new THREE.Color();
+
+ for(let i=0;i<active;i++){
+   const t=active>1?i/(active-1):0;
+
+   if(gsPeriodicMode && gsPeriodicElements.length===118){
+     const element=gsPeriodicElements[i%118];
+     gsSetPeriodicElementColor(c,element);
+     swarm.setColorAt(i,c);
+     continue;
+   }
+
+   if(paletteMode==='rainbow'){
+     c.setHSL((t+phase*.012)%1,.95,.58);
+   }else if(paletteMode==='plasma'){
+     c.setHSL(.76-t*.19,.95,.48+.12*Math.sin(t*12+phase));
+   }else if(paletteMode==='fire'){
+     c.setHSL(.015+t*.105,1,.34+.28*t);
+   }else if(paletteMode==='green'){
+     c.setHSL(.28+t*.12,.95,.38+.2*Math.sin(t*16));
+   }else if(paletteMode==='cyan'){
+     c.setHSL(.49+t*.055,.98,.48+.16*Math.sin(t*18));
+   }else{
+     c.copy(color);
+   }
+
+   swarm.setColorAt(i,c);
+ }
+
+ if(swarm.instanceColor) swarm.instanceColor.needsUpdate=true;
+}
+
+function presets(form){
+ shape=form;
+ buildTargets();
+ persistCurrentState();
+}
+
+populationInput.addEventListener('input',()=>{
+ active=Math.min(MAX_PARTICLES,Number(populationInput.value));
+ ensureCapacity(active);
+ popout.value=active;
+ buildTargets();
+ persistCurrentState();
+});
+energyInput.addEventListener('input',()=>{
+ energy=Number(energyInput.value);
+ energyout.value=energy.toFixed(2);
+ persistCurrentState();
+});
+
+send.addEventListener('click',async()=>{
+ const gsPrompt=document.querySelector('#command').value;
+ gsChooseElement(gsPrompt);
+ gsWake();
+ const message=document.querySelector('#command').value.trim();
+ if(!message||send.disabled)return;
+ send.disabled=true;
+ state.textContent='ChatGPT está planejando a transformação...';
+ try{
+   const response=await fetch('/api/command',{
+     method:'POST',
+     headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({message})
+   });
+   const data=await response.json();
+   if(!response.ok)throw new Error(data.error||'Erro na API');
+   applyPlan(data);
+ }catch(e){
+   reply.textContent='Erro: '+e.message;
+   state.textContent='Aguardando correção';
+ }finally{
+   send.disabled=false;
+ }
+});
+
+document.querySelector('#command').addEventListener('keydown',e=>{
+ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send.click();}
+});
+
+function resize(){
+ const w=stage.clientWidth,h=stage.clientHeight;
+ if(!w||!h)return;
+ camera.aspect=w/h;
+ camera.updateProjectionMatrix();
+ renderer.setSize(w,h,false);
+}
+new ResizeObserver(resize).observe(stage);
+resize();
+buildTargets();
+
+
+// GRID_SOUL_ATOMIC_REST_V2
+// Repouso real: esconde o enxame anterior e mostra um único átomo central.
+// Modelo de Bohr didático, não uma visualização literal de orbitais quânticos.
+const gsAtom = new THREE.Group();
+gsAtom.name = 'GRID_SOUL_ATOMIC_REST_V2';
+gsAtom.visible = false;
+scene.add(gsAtom);
+
+const gsElements = [
+ {s:'H',n:'Hidrogênio',z:1,a:1},
+ {s:'He',n:'Hélio',z:2,a:4},
+ {s:'Li',n:'Lítio',z:3,a:7},
+ {s:'Be',n:'Berílio',z:4,a:9},
+ {s:'B',n:'Boro',z:5,a:11},
+ {s:'C',n:'Carbono',z:6,a:12},
+ {s:'N',n:'Nitrogênio',z:7,a:14},
+ {s:'O',n:'Oxigênio',z:8,a:16},
+ {s:'F',n:'Flúor',z:9,a:19},
+ {s:'Ne',n:'Neônio',z:10,a:20},
+ {s:'Na',n:'Sódio',z:11,a:23},
+ {s:'Mg',n:'Magnésio',z:12,a:24},
+ {s:'Al',n:'Alumínio',z:13,a:27},
+ {s:'Si',n:'Silício',z:14,a:28},
+ {s:'P',n:'Fósforo',z:15,a:31},
+ {s:'S',n:'Enxofre',z:16,a:32},
+ {s:'Cl',n:'Cloro',z:17,a:35},
+ {s:'Ar',n:'Argônio',z:18,a:40},
+ {s:'K',n:'Potássio',z:19,a:39},
+ {s:'Ca',n:'Cálcio',z:20,a:40},
+ {s:'Fe',n:'Ferro',z:26,a:56},
+ {s:'Cu',n:'Cobre',z:29,a:64},
+ {s:'Zn',n:'Zinco',z:30,a:64},
+ {s:'Ag',n:'Prata',z:47,a:108},
+ {s:'Au',n:'Ouro',z:79,a:197},
+ {s:'Hg',n:'Mercúrio',z:80,a:201},
+ {s:'Pb',n:'Chumbo',z:82,a:207},
+ {s:'U',n:'Urânio',z:92,a:238}
+];
+let gsElement = gsElements.find(e=>e.s==='C');
+let gsIdleTimer = null;
+let gsIsResting = false;
+let gsLastTouch = performance.now();
+
+function gsDisposeAtom() {
+ while(gsAtom.children.length) {
+   const o=gsAtom.children[0];
+   gsAtom.remove(o);
+   o.traverse?.(x=>{
+     if(x.geometry && x.geometry!==gsCubeGeometry) x.geometry.dispose();
+     if(x.material && x.material!==gsCubeMaterial) {
+       if(Array.isArray(x.material)) x.material.forEach(m=>m.dispose());
+       else x.material.dispose();
+     }
+   });
+ }
+}
+
+const gsCubeGeometry = new THREE.BoxGeometry(.9,.9,.9);
+const gsCubeMaterial = new THREE.MeshBasicMaterial({
+ color:0x26eaff, wireframe:true, transparent:true, opacity:.8
+});
+const gsNucleusGeometry = new THREE.SphereGeometry(.055,8,6);
+const gsElectronGeometry = new THREE.SphereGeometry(.065,10,8);
+const gsProtonMaterial = new THREE.MeshBasicMaterial({color:0xff7855});
+const gsNeutronMaterial = new THREE.MeshBasicMaterial({color:0xe3f6ff});
+const gsElectronMaterial = new THREE.MeshBasicMaterial({color:0x37f5ff});
+const gsOrbitMaterial = new THREE.LineBasicMaterial({
+ color:0x1dbfff,transparent:true,opacity:.55
+});
+let gsElectrons = [];
+
+function gsLabelTexture(element) {
+ const c=document.createElement('canvas');
+ c.width=256;c.height=160;
+ const x=c.getContext('2d');
+ x.textAlign='center';x.textBaseline='middle';
+ x.shadowColor='#22eaff';x.shadowBlur=22;
+ x.fillStyle='#c7ffff';x.font='bold 76px sans-serif';
+ x.fillText(element.s,128,62);
+ x.shadowBlur=0;x.fillStyle='#65dfff';
+ x.font='bold 26px sans-serif';
+ x.fillText('Z = '+element.z,128,125);
+ const t=new THREE.CanvasTexture(c);
+ t.colorSpace=THREE.SRGBColorSpace;
+ return t;
+}
+
+function gsElectronShells(z) {
+ // Distribuição didática por camadas para os elementos comuns catalogados.
+ const known={
+ 1:[1],2:[2],3:[2,1],4:[2,2],5:[2,3],6:[2,4],7:[2,5],8:[2,6],
+ 9:[2,7],10:[2,8],11:[2,8,1],12:[2,8,2],13:[2,8,3],14:[2,8,4],
+ 15:[2,8,5],16:[2,8,6],17:[2,8,7],18:[2,8,8],19:[2,8,8,1],
+ 20:[2,8,8,2],26:[2,8,14,2],29:[2,8,18,1],30:[2,8,18,2],
+ 47:[2,8,18,18,1],79:[2,8,18,32,18,1],80:[2,8,18,32,18,2],
+ 82:[2,8,18,32,18,4],92:[2,8,18,32,21,9,2]
+ };
+ if(known[z]) return known[z];
+ const shells=[];
+ let left=z;
+ const capacities=[2,8,18,32,32,18,8];
+ for(const cap of capacities) {
+   if(left<=0) break;
+   const amount=Math.min(left,cap);
+   shells.push(amount);left-=amount;
+ }
+ return shells;
+}
+
+function gsBuildAtom(element) {
+ gsDisposeAtom();
+ gsElectrons=[];
+ gsElement=element;
+
+ const cube=new THREE.Mesh(gsCubeGeometry,gsCubeMaterial);
+ gsAtom.add(cube);
+
+ const label=new THREE.Sprite(new THREE.SpriteMaterial({
+   map:gsLabelTexture(element),transparent:true,depthTest:false
+ }));
+ label.scale.set(1.15,.72,1);
+ label.position.set(0,0,.53);
+ gsAtom.add(label);
+
+ // Número de nêutrons estimado pelo isótopo de referência informado.
+ const neutronCount=Math.max(0,element.a-element.z);
+ const nucleons=element.z+neutronCount;
+
+ for(let i=0;i<nucleons;i++) {
+   const isProton=i<element.z;
+   const mesh=new THREE.Mesh(
+     gsNucleusGeometry,
+     isProton?gsProtonMaterial:gsNeutronMaterial
+   );
+   const angle=i*2.399963229728653;
+   const radius=Math.sqrt(i+1)*.022;
+   mesh.position.set(
+     Math.cos(angle)*radius,
+     Math.sin(angle)*radius,
+     ((i%3)-1)*.025
+   );
+   gsAtom.add(mesh);
+ }
+
+ const shells=gsElectronShells(element.z);
+ shells.forEach((count,si)=>{
+   const radius=1.05+si*.48;
+   const tilt=.38+si*.47;
+   const points=[];
+   for(let j=0;j<96;j++) {
+     const a=j/96*Math.PI*2;
+     const p=new THREE.Vector3(
+       Math.cos(a)*radius,Math.sin(a)*radius*.72,0
+     );
+     p.applyEuler(new THREE.Euler(tilt,tilt*.37,tilt*.61));
+     points.push(p);
+   }
+   const orbit=new THREE.LineLoop(
+     new THREE.BufferGeometry().setFromPoints(points),gsOrbitMaterial
+   );
+   gsAtom.add(orbit);
+
+   for(let e=0;e<count;e++) {
+     const electron=new THREE.Mesh(gsElectronGeometry,gsElectronMaterial);
+     gsAtom.add(electron);
+     gsElectrons.push({
+       mesh:electron,radius,tilt,
+       angle:Math.PI*2*e/count+si*.29,
+       speed:(si%2?-1:1)*(.7+si*.12)
+     });
+   }
+ });
+
+ state.textContent='Repouso atômico · '+element.n+
+   ' · '+element.z+' prótons · '+neutronCount+
+   ' nêutrons · '+element.z+' elétrons';
+}
+
+function gsEnterRest() {
+ if(gsIsResting) return;
+ gsIsResting=true;
+ gsPeriodicMode=true;
+ swarm.visible=true;
+ gsAtom.visible=false;
+ gsBuildPeriodicLabels();
+ buildTargets();
+ state.textContent='Repouso periódico · 118 elementos · enxame coletivo';
+}
+
+function gsWake() {
+ gsLastTouch=performance.now();
+ if(gsIdleTimer!==null) clearTimeout(gsIdleTimer);
+ gsIdleTimer=null;
+ if(gsIsResting) {
+   gsIsResting=false;
+   gsPeriodicMode=false;
+   gsAtom.visible=false;
+   if(gsPeriodicLabels) gsPeriodicLabels.visible=false;
+   swarm.visible=true;
+   buildTargets();
+   state.textContent='Enxame ativo';
+ }
+ gsIdleTimer=setTimeout(gsEnterRest,12000);
+}
+
+function gsChooseElement(command) {
+ const q=String(command||'').normalize('NFD')
+   .replace(/[\u0300-\u036f]/g,'').toLowerCase();
+ const aliases={
+  hidrogenio:'H',helio:'He',litio:'Li',berilio:'Be',boro:'B',
+  carbono:'C',nitrogenio:'N',oxigenio:'O',fluor:'F',neonio:'Ne',
+  sodio:'Na',magnesio:'Mg',aluminio:'Al',silicio:'Si',
+  fosforo:'P',enxofre:'S',cloro:'Cl',argonio:'Ar',
+  potassio:'K',calcio:'Ca',ferro:'Fe',cobre:'Cu',zinco:'Zn',
+  prata:'Ag',ouro:'Au',mercurio:'Hg',chumbo:'Pb',uranio:'U'
+ };
+ for(const [name,symbol] of Object.entries(aliases)) {
+   if(q.includes(name)) {
+     const found=gsElements.find(e=>e.s===symbol);
+     if(found) gsElement=found;
+     return;
+   }
+ }
+}
+
+document.addEventListener('pointerdown',gsWake,{passive:true});
+document.addEventListener('keydown',gsWake);
+document.addEventListener('input',gsWake,{passive:true});
+controls.addEventListener('start',gsWake);
+gsWake();
+// FIM GRID_SOUL_ATOMIC_REST_V2
+
+function animate(){
+ requestAnimationFrame(animate);
+ phase+=.012*(.25+energy);
+ if(gsIsResting){
+   const now=performance.now();
+   const dt=Math.min(.05,(now-(window.__gsAtomFrame||now))/1000);
+   window.__gsAtomFrame=now;
+   gsAtom.rotation.y+=dt*.12;
+   for(const e of gsElectrons){
+     e.angle+=dt*e.speed;
+     const p=new THREE.Vector3(Math.cos(e.angle)*e.radius,Math.sin(e.angle)*e.radius*.72,Math.sin(e.angle*1.7)*e.radius*.22);
+     p.applyEuler(new THREE.Euler(e.tilt,e.tilt*.37,e.tilt*.61));
+     e.mesh.position.copy(p);
+   }
+ }
+
+ // Um campo de movimento compartilhado conduz o enxame.
+ // A atração suave preserva a forma escolhida; a inércia permite
+ // dispersão orgânica sem comparar cada partícula com todas as outras.
+ const cohesion=.012;
+ const flowStrength=.0045*(.25+energy);
+ const damping=.94;
+ const maxSpeed=.035;
+
+ for(let i=0;i<active;i++){
+   const t=target[i];
+   const p=current[i];
+   const v=velocity[i];
+
+   const fx=Math.sin(phase*.73+p.y*.8+i*.001)*flowStrength;
+   const fy=Math.sin(phase*.61+p.z*.8+i*.0013)*flowStrength;
+   const fz=Math.sin(phase*.83+p.x*.8+i*.0007)*flowStrength;
+
+   v.x=(v.x+(t.x-p.x)*cohesion+fx)*damping;
+   v.y=(v.y+(t.y-p.y)*cohesion+fy)*damping;
+   v.z=(v.z+(t.z-p.z)*cohesion+fz)*damping;
+
+   const speed=Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
+   if(speed>maxSpeed){
+     const factor=maxSpeed/speed;
+     v.multiplyScalar(factor);
+   }
+
+   p.add(v);
+
+   dummy.position.copy(p);
+   dummy.position.applyEuler(rotation);
+   dummy.position.add(move);
+   const s=.7+energy*.5;
+   dummy.scale.setScalar(s);
+   dummy.updateMatrix();
+   swarm.setMatrixAt(i,dummy.matrix);
+ }
+ if(paletteMode==='single'){
+   material.color.copy(color);
+   material.emissive.copy(color).multiplyScalar(.24);
+ }else{
+   material.color.set('#ffffff');
+   material.emissive.set('#06121a');
+ }
+ swarm.instanceMatrix.needsUpdate=true;
+ controls.update();
+ renderer.render(scene,camera);
+}
+animate();
+state.textContent='Motor 3D operacional · recuperando memória persistente...';
+(async function restoreMemory(){
+ try{
+   const response=await fetch('/api/memory');
+   if(!response.ok)throw new Error('Memória indisponível');
+   const saved=await response.json();
+   if(saved.lastPlan && typeof saved.lastPlan==='object'){
+     document.querySelector('#command').value=saved.lastCommand||'';
+     applyPlan(saved.lastPlan);
+     state.textContent=`Memória recuperada · forma: ${shape} · ${active.toLocaleString('pt-BR')} microcubos`;
+   }else{
+     state.textContent='Motor 3D operacional · memória nova, aguardando comando';
+   }
+ }catch(error){
+   state.textContent='Motor 3D operacional · memória indisponível nesta sessão';
+ }
+})();
+</script>
+</body>
+</html>
+
+
+// GRID_SOUL_PERIODIC_CLICK_V1
+const gsPeriodicRaycaster = new THREE.Raycaster();
+const gsPeriodicPointer = new THREE.Vector2();
+let gsPeriodicCameraTween = null;
+
+renderer.domElement.addEventListener('pointerdown', function(event) {
+  if (!gsIsResting || !gsPeriodicMode || !gsPeriodicLabels) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  gsPeriodicPointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  gsPeriodicPointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  gsPeriodicRaycaster.setFromCamera(gsPeriodicPointer, camera);
+
+  const hits = gsPeriodicRaycaster.intersectObjects(
+    gsPeriodicLabels.children, false
+  );
+  if (!hits.length) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const element = hits[0].object.userData.element;
+  if (!element) return;
+
+  gsElement = gsElements.find(e => e.z === element.z) || element;
+  gsBuildAtom(gsElement);
+
+  const p = gsPeriodicPosition(element);
+  gsAtom.visible = true;
+  gsAtom.position.set(p.x, p.y, 0.35);
+  gsAtom.scale.setScalar(0.65);
+
+  controls.target.set(p.x, p.y, 0);
+  camera.position.set(p.x, p.y + 0.6, 5.5);
+  controls.update();
+
+  state.textContent =
+    `Elemento selecionado: ${element.s} · ${element.n} · Z=${element.z}`;
+}, { capture: true });
+
+
+
+// GRID_SOUL_CLICK_WAKE_GUARD_V1
+renderer.domElement.addEventListener('pointerdown', function(event) {
+  if (!gsIsResting || !gsPeriodicMode || !gsPeriodicLabels) return;
+
+  // Evita que o clique na tabela chegue ao listener global de despertar.
+  event.preventDefault();
+  event.stopImmediatePropagation();
+
+  // O manipulador anterior pode já ter selecionado o símbolo.
+  if (gsAtom && gsAtom.visible) return;
+
+  gsPeriodicRaycaster.setFromCamera(
+    new THREE.Vector2(
+      (event.clientX / window.innerWidth) * 2 - 1,
+      -(event.clientY / window.innerHeight) * 2 + 1
+    ),
+    camera
+  );
+
+  const hits = gsPeriodicRaycaster.intersectObjects(gsPeriodicLabels.children, true);
+  if (!hits.length) return;
+
+  const selected = hits[0].object.userData && hits[0].object.userData.element;
+  if (!selected) return;
+
+  const element = gsElements.find(e => Number(e.z) === Number(selected.z));
+  if (!element) return;
+
+  gsElement = element;
+  gsBuildAtom(element);
+  gsAtom.visible = true;
+
+  const pos = gsPeriodicPosition(selected);
+  gsAtom.position.set(pos.x, pos.y, pos.z + 0.8);
+  gsAtom.scale.setScalar(0.65);
+
+  controls.target.set(pos.x, pos.y, pos.z);
+  camera.position.set(pos.x, pos.y + 0.6, pos.z + 5.5);
+  controls.update();
+
+  state.textContent =
+    'Elemento selecionado: ' + selected.symbol + ' — ' + selected.name;
+}, true);

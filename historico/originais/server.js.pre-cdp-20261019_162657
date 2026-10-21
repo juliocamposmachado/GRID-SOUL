@@ -1,0 +1,176 @@
+import express from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+
+app.disable('x-powered-by');
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.json({ limit: '8kb' }));
+app.use('/api/', rateLimit({ windowMs: 60_000, limit: 12, skip: req => req.path === '/extension/next' }));
+
+const shapes = ['sphere', 'torus', 'spiral', 'wave', 'cloud', 'face', 'custom'];
+const partKinds = ['sphere', 'ellipsoid', 'torus', 'cylinder', 'cone', 'box'];
+
+// GRID_SOUL_EXTENSION_BRIDGE
+let busy = false;
+let pendingExtensionTask = null;
+let extensionWaiter = null;
+let extensionLastSeen = 0;
+let extensionTaskCounter = 0;
+
+function extractJSON(raw) {
+  const cleaned = raw
+    .replace(/```(?:json)?/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('A resposta não contém JSON.');
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+function sanitizePlan(p) {
+  if (!p || typeof p !== 'object') throw new Error('Plano inválido.');
+
+  const color = typeof p.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.color)
+    ? p.color : '#35eaff';
+
+  const parts = (Array.isArray(p.parts) ? p.parts : [])
+    .slice(0, 24)
+    .filter(part => part && partKinds.includes(part.kind))
+    .map(part => ({
+      kind: part.kind,
+      x: clamp(part.x, -4, 4, 0),
+      y: clamp(part.y, -4, 4, 0),
+      z: clamp(part.z, -4, 4, 0),
+      sx: clamp(part.sx, 0.05, 3, 1),
+      sy: clamp(part.sy, 0.05, 3, 1),
+      sz: clamp(part.sz, 0.05, 3, 1),
+      rx: clamp(part.rx, -6.28, 6.28, 0),
+      ry: clamp(part.ry, -6.28, 6.28, 0),
+      rz: clamp(part.rz, -6.28, 6.28, 0)
+    }));
+
+  const shape = shapes.includes(p.shape) ? p.shape : 'cloud';
+
+  return {
+    reply: String(p.reply || 'Plano recebido do ChatGPT.').slice(0, 700),
+    shape: shape === 'custom' && parts.length === 0 ? 'cloud' : shape,
+    population: Math.round(clamp(p.population, 1000, 500000, 6000)),
+    energy: clamp(p.energy, 0, 1, 0.6),
+    scale: clamp(p.scale, 0.5, 8, 2),
+    rotationX: clamp(p.rotationX, -6.28, 6.28, 0),
+    rotationY: clamp(p.rotationY, -6.28, 6.28, 0),
+    rotationZ: clamp(p.rotationZ, -6.28, 6.28, 0),
+    moveX: clamp(p.moveX, -10, 10, 0),
+    moveY: clamp(p.moveY, -10, 10, 0),
+    moveZ: clamp(p.moveZ, -10, 10, 0),
+    color,
+    parts
+  };
+}
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'GRID SOUL',
+    brain: 'ChatGPT via extensão no Chrome existente',
+    browserReady: Date.now() - extensionLastSeen < 10000,
+    busy
+  });
+});
+
+app.get('/api/extension/next', (_req, res) => {
+  extensionLastSeen = Date.now();
+  if (!pendingExtensionTask) return res.json({});
+  const task = pendingExtensionTask;
+  pendingExtensionTask = null;
+  res.json(task);
+});
+
+app.post('/api/extension/result', (req, res) => {
+  const { id, result, error } = req.body || {};
+  if (!extensionWaiter || id !== extensionWaiter.id) {
+    return res.status(409).json({ error: 'Tarefa inexistente ou expirada.' });
+  }
+  const waiter = extensionWaiter;
+  extensionWaiter = null;
+  waiter.finish({ result, error });
+  res.json({ ok: true });
+});
+
+app.post('/api/command', async (req, res) => {
+  const message = req.body?.message;
+
+  if (typeof message !== 'string' || !message.trim() || message.length > 1200) {
+    return res.status(400).json({ error: 'Informe um comando de até 1200 caracteres.' });
+  }
+  if (busy) {
+    return res.status(429).json({ error: 'O GRID SOUL já está aguardando outra resposta do ChatGPT.' });
+  }
+
+  busy = true;
+  let taskId = null;
+
+  try {
+    const prompt = [
+      'Você é o cérebro de GRID SOUL, um único enxame visual coordenado de microcubos 3D.',
+      'Interprete o pedido e devolva SOMENTE um objeto JSON válido, sem markdown nem texto externo.',
+      'Use exatamente estes campos: reply, shape, population, energy, scale, rotationX, rotationY, rotationZ, moveX, moveY, moveZ, color, parts.',
+      'shape permitido: sphere, torus, spiral, wave, cloud, face, custom.',
+      'Para rosto humanoide, escolha face. population inteiro entre 1000 e 500000; energy entre 0 e 1; scale entre 0.5 e 8.',
+      'Rotações entre -6.28 e 6.28; moveX, moveY, moveZ entre -10 e 10; color hexadecimal #RRGGBB.',
+      'parts deve ser [] exceto quando shape for custom. Para custom, crie até 24 partes que formem uma única figura.',
+      'Cada parte deve ter kind, x, y, z, sx, sy, sz, rx, ry, rz.',
+      'kind permitido: sphere, ellipsoid, torus, cylinder, cone, box.',
+      'Posições de partes entre -4 e 4; dimensões entre 0.05 e 3; rotações entre -6.28 e 6.28.',
+      'Não produza código executável. Não solicite nem execute comandos do sistema.',
+      'Pedido do usuário: ' + message.trim()
+    ].join('\n');
+
+    taskId = 'grid-' + Date.now() + '-' + (++extensionTaskCounter);
+
+    const raw = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (extensionWaiter?.id === taskId) extensionWaiter = null;
+        if (pendingExtensionTask?.id === taskId) pendingExtensionTask = null;
+        reject(new Error('Tempo esgotado. Verifique se a extensão está ativa e se a aba do ChatGPT está aberta.'));
+      }, 180000);
+
+      extensionWaiter = {
+        id: taskId,
+        finish: value => {
+          clearTimeout(timer);
+          if (value.error) reject(new Error(value.error));
+          else resolve(String(value.result || ''));
+        }
+      };
+      pendingExtensionTask = { id: taskId, message: prompt };
+    });
+
+    const plan = sanitizePlan(extractJSON(raw));
+    res.json(plan);
+  } catch (err) {
+    console.error('ChatGPT bridge:', String(err.message || err).slice(0, 500));
+    res.status(502).json({
+      error: String(err.message || 'Não foi possível obter um plano válido do ChatGPT.').slice(0, 300)
+    });
+  } finally {
+    if (extensionWaiter?.id === taskId) extensionWaiter = null;
+    if (pendingExtensionTask?.id === taskId) pendingExtensionTask = null;
+    busy = false;
+  }
+});
+
+app.use(express.static(path.join(ROOT, 'public')));
+
+app.listen(8765, '127.0.0.1', () => {
+  console.log('GRID SOUL: http://127.0.0.1:8765');
+  console.log('Cérebro: ChatGPT na aba existente via extensão local.');
+});
